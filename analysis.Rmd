@@ -1,0 +1,143 @@
+---
+title: "Meta-analysis of BCG vaccine trials with metafor"
+subtitle: "Random-effects model, heterogeneity, publication bias and moderators"
+author: "Ahmed Hamdy"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.width = 8, fig.height = 6)
+set.seed(123)
+```
+
+## 1. Question and data
+
+**Question:** does BCG vaccination reduce the risk of tuberculosis, and does the
+effect differ between studies?
+
+**Data:** the classic `dat.bcg` dataset shipped with the `metafor` package
+(Colditz et al. 1994): 13 randomized or quasi-randomized trials. For each trial
+it reports the number of tuberculosis cases and non-cases in the vaccinated
+(`tpos`, `tneg`) and control (`cpos`, `cneg`) groups, plus the absolute latitude
+of the study site (`ablat`) and the allocation method (`alloc`).
+
+This project covers the **statistical meta-analysis** step. It does not include
+a literature search, screening or risk-of-bias assessment.
+
+```{r libs}
+library(metafor)
+```
+
+```{r data}
+dat.bcg
+```
+
+## 2. Effect sizes
+
+The effect measure is the log risk ratio (vaccinated vs control). A value below
+zero means fewer cases among the vaccinated.
+
+```{r escalc}
+dat <- escalc(measure = "RR", ai = tpos, bi = tneg, ci = cpos, di = cneg,
+              data = dat.bcg)
+dat$study <- paste(dat$author, dat$year, sep = ", ")
+dat[, c("study", "yi", "vi")]
+```
+
+## 3. Random-effects meta-analysis
+
+A random-effects model (REML) allows the true effect to differ between trials.
+
+```{r rma}
+res <- rma(yi, vi, data = dat, method = "REML", slab = dat$study)
+summary(res)
+
+# Pooled estimate back-transformed to a risk ratio
+predict(res, transf = exp, digits = 2)
+```
+
+## 4. Forest plot
+
+```{r forest}
+forest(res, atransf = exp, at = log(c(0.05, 0.25, 1, 4)),
+       header = TRUE, xlab = "Risk ratio (log scale)")
+```
+
+## 5. Heterogeneity
+
+`tau^2` is the between-study variance, `I^2` the percentage of total variability
+due to heterogeneity, and `Q` tests whether the trials share one true effect.
+
+```{r het}
+data.frame(tau2 = res$tau2, I2 = res$I2, H2 = res$H2,
+           Q = res$QE, Q_pvalue = res$QEp)
+
+# Prediction interval on the risk-ratio scale
+predict(res, transf = exp, digits = 2)
+```
+
+## 6. Publication bias
+
+```{r bias}
+funnel(res)
+regtest(res)            # Egger-type regression test
+trimfill(res)           # trim-and-fill adjusted estimate
+```
+
+## 7. Sensitivity: leave-one-out
+
+```{r l1o}
+l1 <- leave1out(res, transf = exp)
+out <- data.frame(omitted = dat$study, as.data.frame(l1)[, c("estimate", "ci.lb", "ci.ub", "I2")])
+out
+```
+
+## 8. Explaining heterogeneity: moderators
+
+Absolute latitude is a known moderator of BCG efficacy. A meta-regression tests
+whether the effect changes with latitude.
+
+```{r mod}
+res.lat <- rma(yi, vi, mods = ~ ablat, data = dat, method = "REML")
+summary(res.lat)
+
+regplot(res.lat, mod = "ablat", xlab = "Absolute latitude",
+        ylab = "Log risk ratio")
+```
+
+Allocation method as a categorical moderator:
+
+```{r alloc}
+res.alloc <- rma(yi, vi, mods = ~ factor(alloc), data = dat, method = "REML")
+res.alloc
+```
+
+## 9. Export
+
+```{r export}
+dir.create("results", showWarnings = FALSE)
+write.csv(dat[, c("study", "yi", "vi")], "results/effect_sizes.csv", row.names = FALSE)
+write.csv(out, "results/leave_one_out.csv", row.names = FALSE)
+```
+
+## 10. Limitations
+
+- Only 13 trials, so tests for heterogeneity, publication bias and moderators have
+  limited power.
+- Funnel-plot methods are unreliable with fewer than about 10 studies.
+- Latitude is a study-level variable, so the meta-regression is an association
+  across trials, not proof of a causal mechanism.
+- This project does not cover study identification, screening or risk-of-bias
+  assessment (the PRISMA steps).
+
+## 11. Reproducibility
+
+```{r session}
+sessionInfo()
+```
